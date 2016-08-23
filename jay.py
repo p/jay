@@ -182,3 +182,6 @@ def ls(monitor):
     """
     echo_instances(monitor.instances)
 
+
+if __name__ == '__main__':
+    cli()
