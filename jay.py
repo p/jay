@@ -8,7 +8,7 @@ from boto3.session import Session
 
 NAME = 'jay'
 Instance = namedtuple(
-    'Instance', ['name', 'role', 'public_ip', 'private_ip', 'key_name'])
+    'Instance', ['name', 'role', 'public_ip', 'private_ip', 'id', 'key_name'])
 
 
 class InstanceMonitor(object):
@@ -45,6 +45,7 @@ class InstanceMonitor(object):
             role=self._get_tag(raw_instance.tags, 'role'),
             public_ip=raw_instance.public_ip_address,
             private_ip=raw_instance.private_ip_address,
+            id=raw_instance.id,
             key_name=raw_instance.key_name
         )
 
@@ -136,21 +137,39 @@ def cli(ctx, tags, profile):
               help='Directory where the keys are stored.')
 @click.option('--private-ip', '-p',
               is_flag=True, help='Use private ip to ssh to instance.')
+@click.argument('instances', nargs=-1)
 @click.pass_obj
-def ssh(monitor, private_ip, keys_dir, ssh_user, tmux_all, no_pem):
+def ssh(monitor, private_ip, keys_dir, ssh_user, tmux_all, no_pem, instances):
     """
     SSH into ec2 servers.
     """
-    instances = monitor.instances
-    if instances:
-        if tmux_all:
+    available_instances = monitor.instances
+    if available_instances:
+        if instances:
+            perform_instances = []
+            for instance in instances:
+                if instance.startswith('i-'):
+                    matched = [i for i in available_instances
+                        if i.id == instance]
+                    if matched:
+                        perform_instances.extend(matched)
+                    else:
+                        raise click.Abort('%s not found' % instance)
+            if len(perform_instances) > 1:
+                tmux_all = True
+            else:
+                instance = perform_instances[0]
+                cmd = _get_ssh_cmd(
+                    instance, keys_dir, ssh_user, private_ip, no_pem)
+                subprocess.call(cmd)
+        elif tmux_all:
             click.confirm(
                 'Do you want to ssh to {} instances'.format(
-                    len(instances)), abort=True)
+                    len(available_instances)), abort=True)
             cmds = [
                 ' '.join(_get_ssh_cmd(instance, keys_dir,
                                       ssh_user, private_ip, no_pem))
-                for instance in instances]
+                for instance in available_instances]
             uid = str(uuid.uuid4())[:6]
             session_name = '{}-{}'.format(NAME, uid)
             subprocess.call(
@@ -162,11 +181,11 @@ def ssh(monitor, private_ip, keys_dir, ssh_user, tmux_all, no_pem):
                 ['tmux', 'select-layout', '-t', session_name, 'even-vertical'])
             subprocess.call(['tmux', 'attach', '-t', session_name])
         else:
-            echo_instances(instances, True)
+            echo_instances(available_instances, True)
             index = click.prompt(
                 'Please select an instance from the list',
-                type=click.IntRange(0, len(instances)), default=0)
-            instance = instances[index]
+                type=click.IntRange(0, len(available_instances)), default=0)
+            instance = available_instances[index]
             cmd = _get_ssh_cmd(
                 instance, keys_dir, ssh_user, private_ip, no_pem)
             subprocess.call(cmd)
